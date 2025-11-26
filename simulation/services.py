@@ -1,4 +1,5 @@
 import numpy as np, pandas as pd, io
+from xlsxwriter.utility import xl_col_to_name
 from datetime import datetime, timedelta
 import matplotlib
 matplotlib.use('Agg')               # render server
@@ -154,13 +155,14 @@ def simulate_two_trucks(days, route_key, Q_proc_m3h, TS_in, TS_cake, eta_captura
         "Ruta": route_key, "Días": days, "Horas RUN planta": round(proc_hours_run,2),
         "Torta producida (t)": round(proc_cake,2), "tDR (t)": round(proc_tDR,2),
         "Energía (kWh)": round(proc_kWh,1), "Viajes distribución": dist_trips,
-        "Km distribución": round(dist_km,1), "Costo energía (CLP)": round(energy_cost),
-        "Costo transporte (CLP)": round(trans_cost), "Costo total (CLP)": round(total_cost),
-        "Stock final (t)": round(sum(stock.values()),2)
+        "Km distribución": round(dist_km,1), "Km recolección": round(proc_km,1),
+        "Costo energía (CLP)": round(energy_cost), "Costo transporte (CLP)": round(trans_cost),
+        "Costo total (CLP)": round(total_cost), "Stock final (t)": round(sum(stock.values()),2)
     }
     df_log = pd.DataFrame(rows)
     stock_cols = [c for c in df_log.columns if c.startswith("stock_")]
     df_stock = df_log[["time"]+stock_cols].copy()
+    df_stock["stock_total_t"] = df_log["stock_total_t"]
 
     # gráfico PNG (stock total)
     fig, ax = plt.subplots(figsize=(6,3))
@@ -173,10 +175,177 @@ def simulate_two_trucks(days, route_key, Q_proc_m3h, TS_in, TS_cake, eta_captura
 
     # Excel con KPI, Log y Stock
     buf_xlsx = io.BytesIO()
+    # métricas adicionales para el Excel
+    total_km = proc_km + dist_km
+    costo_unitario_t = total_cost / max(proc_cake, 1e-6)
+    costo_unitario_km = total_cost / max(total_km, 1e-6)
+    costo_unitario_viaje = total_cost / max(dist_trips, 1) if dist_trips else 0
+    energia_por_t = proc_kWh / max(proc_cake, 1e-6)
+    costo_medio = (energy_cost + trans_cost) / 2
+
+    df_kpi = pd.DataFrame([kpis])
+
     with pd.ExcelWriter(buf_xlsx, engine='xlsxwriter') as writer:
-        pd.DataFrame([kpis]).to_excel(writer, sheet_name="KPI", index=False)
+        df_kpi.to_excel(writer, sheet_name="KPI", startrow=2, index=False, header=False)
         df_log.to_excel(writer, sheet_name="Log", index=False)
         df_stock.to_excel(writer, sheet_name="Stock", index=False)
+
+        workbook = writer.book
+
+        # formatos base
+        title_fmt = workbook.add_format({"bold": True, "font_size": 18})
+        subtitle_fmt = workbook.add_format({"font_size": 11, "italic": True, "font_color": "#555555"})
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#e8eef7", "border": 1})
+        card_title_fmt = workbook.add_format({"bold": True, "font_color": "#0f3057"})
+        card_value_fmt = workbook.add_format({"bold": True, "font_size": 12, "bg_color": "#f6f8fb", "border": 1, "align": "center"})
+        currency_fmt = workbook.add_format({"num_format": "$ #,##0", "border": 1})
+        number_fmt = workbook.add_format({"num_format": "#,##0.00", "border": 1})
+        percent_fmt = workbook.add_format({"num_format": "0.0%", "border": 1})
+        note_fmt = workbook.add_format({"text_wrap": True, "font_color": "#333333"})
+
+        # hoja resumen visual
+        resumen_ws = workbook.add_worksheet("Resumen")
+        resumen_ws.merge_range("A1:F1", "Simulación logística - Resumen ejecutivo", title_fmt)
+        resumen_ws.merge_range("A2:F2", "Costos y operación por ruta con desglose económico y métricas unitarias", subtitle_fmt)
+
+        resumen_ws.write("A4", "Resumen rápido", header_fmt)
+        cards = [
+            ("Costo total (CLP)", total_cost, currency_fmt),
+            ("Torta producida (t)", proc_cake, number_fmt),
+            ("Energía (kWh)", proc_kWh, number_fmt),
+            ("Horas RUN planta", proc_hours_run, number_fmt),
+            ("Viajes distribución", dist_trips, number_fmt),
+            ("Km totales", total_km, number_fmt),
+        ]
+        start_row = 5
+        start_col = 0
+        for i, (label, value, fmt) in enumerate(cards):
+            r = start_row + (i // 3) * 2
+            c = start_col + (i % 3) * 2
+            resumen_ws.write(r, c, label, card_title_fmt)
+            resumen_ws.write(r + 1, c, value, card_value_fmt)
+            resumen_ws.set_column(c, c, 18)
+
+        # desglose económico
+        resumen_ws.write("A10", "Desglose económico", header_fmt)
+        breakdown_headers = ["Concepto", "Monto (CLP)", "% del total", "Δ vs costo medio", "Explicación"]
+        for col, h in enumerate(breakdown_headers):
+            resumen_ws.write(10, col, h, header_fmt)
+
+        breakdown_data = [
+            ("Energía", energy_cost, energy_cost / total_cost if total_cost else 0, energy_cost - costo_medio, "Consumo energético en planta."),
+            ("Transporte", trans_cost, trans_cost / total_cost if total_cost else 0, trans_cost - costo_medio, "Traslado y tonelada-km de distribución."),
+            ("Total", total_cost, 1, total_cost - costo_medio, "Suma de energía + transporte."),
+        ]
+        for row_offset, (name, amount, pct, delta, desc) in enumerate(breakdown_data, start=11):
+            resumen_ws.write(row_offset, 0, name)
+            resumen_ws.write(row_offset, 1, amount, currency_fmt)
+            resumen_ws.write(row_offset, 2, pct, percent_fmt)
+            resumen_ws.write(row_offset, 3, delta, currency_fmt)
+            resumen_ws.write(row_offset, 4, desc, note_fmt)
+
+        resumen_ws.conditional_format(11, 1, 13, 1, {"type": "3_color_scale"})
+
+        # métricas unitarias y normalizadas
+        resumen_ws.write("A15", "Métricas unitarias", header_fmt)
+        unit_headers = ["Indicador", "Valor", "Descripción"]
+        for col, h in enumerate(unit_headers):
+            resumen_ws.write(15, col, h, header_fmt)
+        unit_rows = [
+            ("Costo unitario por t", costo_unitario_t, "Costo total dividido por torta producida."),
+            ("Costo unitario por km", costo_unitario_km, "Costo total normalizado por km recorridos (planta + distribución)."),
+            ("Costo unitario por viaje", costo_unitario_viaje, "Costo promedio por viaje de distribución."),
+            ("Energía por t", energia_por_t, "kWh consumidos por tonelada producida."),
+        ]
+        for row_offset, (name, value, desc) in enumerate(unit_rows, start=16):
+            resumen_ws.write(row_offset, 0, name)
+            resumen_ws.write(row_offset, 1, value, number_fmt)
+            resumen_ws.write(row_offset, 2, desc, note_fmt)
+
+        # datos de ruta para contexto y lectura sencilla
+        resumen_ws.write("A21", "Tramos de la ruta", header_fmt)
+        route_headers = ["Desde", "Hasta", "Km", "Horas"]
+        for col, h in enumerate(route_headers):
+            resumen_ws.write(21, col, h, header_fmt)
+        for idx, tramo in enumerate(route, start=22):
+            resumen_ws.write(idx, 0, tramo.get("from"))
+            resumen_ws.write(idx, 1, tramo.get("to"))
+            resumen_ws.write_number(idx, 2, tramo.get("km", 0), number_fmt)
+            resumen_ws.write_number(idx, 3, tramo.get("hours", 0), number_fmt)
+
+        # sparkline para stock total
+        resumen_ws.write("F10", "Tendencia stock total")
+        total_col = xl_col_to_name(len(stock_cols) + 1)
+        resumen_ws.add_sparkline(
+            "F11",
+            {
+                "range": f"Stock!${total_col}$2:${total_col}${len(df_stock)+1}",
+                "type": "column",
+            },
+        )
+
+        # gráfico de barras apiladas para composición de costos
+        chart = workbook.add_chart({"type": "column", "subtype": "stacked"})
+        chart.add_series({"name": "Energía", "values": f"=Resumen!$B$12:$B$12"})
+        chart.add_series({"name": "Transporte", "values": f"=Resumen!$B$13:$B$13"})
+        chart.set_title({"name": "Composición de costos"})
+        chart.set_x_axis({"visible": False})
+        chart.set_y_axis({"name": "CLP"})
+        resumen_ws.insert_chart("D5", chart, {"x_scale": 1.1, "y_scale": 1.1})
+
+        # notas y definiciones para lectores no técnicos
+        resumen_ws.write("A29", "Notas y definiciones", header_fmt)
+        resumen_ws.write("A30", "RUN: Horas efectivas de operación de planta.\nTDR: Toneladas de Densidad Real (sólidos recuperados).\nLos costos se muestran en CLP con separador de miles. Se incluye desglose energético y de transporte, además de métricas unitarias para facilitar comparaciones entre rutas.", note_fmt)
+        resumen_ws.set_column("A:A", 18)
+        resumen_ws.set_column("B:B", 16)
+        resumen_ws.set_column("C:C", 20)
+        resumen_ws.set_column("D:D", 18)
+        resumen_ws.set_column("E:E", 40)
+        resumen_ws.set_column("F:F", 20)
+
+        # hoja KPI con formato y filtros
+        kpi_ws = writer.sheets["KPI"]
+        for col, name in enumerate(df_kpi.columns):
+            kpi_ws.write(0, col, name, header_fmt)
+            description = {
+                "Ruta": "Ruta seleccionada (NORTE o SUR)",
+                "Días": "Duración total de la simulación (días)",
+                "Horas RUN planta": "Horas efectivas de operación de planta",
+                "Torta producida (t)": "Toneladas de torta producida",
+                "tDR (t)": "Toneladas de sólidos recuperados",
+                "Energía (kWh)": "Consumo energético acumulado",
+                "Viajes distribución": "Cantidad de viajes realizados",
+                "Km distribución": "Km recorridos en distribución",
+                "Km recolección": "Km recorridos durante la recolección",
+                "Costo energía (CLP)": "Costo asociado al consumo de energía",
+                "Costo transporte (CLP)": "Costo asociado a transporte y tonelada-km",
+                "Costo total (CLP)": "Suma de energía y transporte",
+                "Stock final (t)": "Stock remanente al cierre",
+            }.get(name, "")
+            kpi_ws.write(1, col, description, note_fmt)
+        kpi_ws.autofilter(0, 0, len(df_kpi)+2, len(df_kpi.columns)-1)
+        kpi_ws.set_row(0, None, header_fmt)
+        for col in range(len(df_kpi.columns)):
+            kpi_ws.set_column(col, col, 18)
+        kpi_ws.freeze_panes(2, 0)
+
+        # hoja Log con filtros, formatos y columnas legibles
+        log_ws = writer.sheets["Log"]
+        log_ws.freeze_panes(1, 1)
+        log_ws.autofilter(0, 0, len(df_log), len(df_log.columns)-1)
+        log_ws.set_column(0, 0, 20)
+        log_ws.set_column(1, 6, 14)
+        log_ws.set_column(7, 7 + len(stock_cols), 14)
+        log_ws.conditional_format(1, df_log.columns.get_loc("dist_km_cum"), len(df_log), df_log.columns.get_loc("dist_km_cum"), {"type": "3_color_scale"})
+        log_ws.conditional_format(1, df_log.columns.get_loc("stock_total_t"), len(df_log), df_log.columns.get_loc("stock_total_t"), {"type": "data_bar", "bar_color": "#4caf50"})
+
+        # hoja Stock con filtros y formato
+        stock_ws = writer.sheets["Stock"]
+        stock_ws.freeze_panes(1, 1)
+        stock_ws.autofilter(0, 0, len(df_stock), len(df_stock.columns)-1)
+        stock_ws.set_column(0, 0, 20)
+        stock_ws.set_column(1, len(stock_cols)+1, 14)
+
     buf_xlsx.seek(0)
 
     return kpis, df_log, df_stock, buf_png, buf_xlsx
