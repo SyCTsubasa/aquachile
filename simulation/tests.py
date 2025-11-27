@@ -37,11 +37,14 @@ class ScenarioFlowTests(TestCase):
 
         self.assertRedirects(response, reverse("scenario_detail", args=[scenario.id]))
         files = ResultFile.objects.filter(scenario=scenario)
-        self.assertEqual(files.count(), 2)
-        self.assertSetEqual(set(files.values_list("kind", flat=True)), {"excel", "grafico"})
+        self.assertEqual(files.count(), 3)
+        self.assertSetEqual(
+            set(files.values_list("kind", flat=True)),
+            {"excel", "grafico_total", "grafico_pisciculturas"},
+        )
 
     def test_simulation_uses_route_data_and_produces_assets(self):
-        kpis, df_log, df_stock, png, xlsx = simulate_two_trucks(
+        kpis, df_log, df_stock, png_total, png_centers, xlsx = simulate_two_trucks(
             days=1,
             route_key="SUR",
             volume_m3=20,
@@ -60,7 +63,8 @@ class ScenarioFlowTests(TestCase):
 
         self.assertEqual(kpis["Ruta"], "SUR")
         self.assertGreater(df_log["stock_total_t"].max(), 0)
-        self.assertGreater(len(png.read()), 0)
+        self.assertGreater(len(png_total.read()), 0)
+        self.assertGreater(len(png_centers.read()), 0)
         self.assertGreater(len(xlsx.read()), 0)
 
 

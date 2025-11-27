@@ -198,20 +198,29 @@ def simulate_two_trucks(
     df_stock = df_log[["time"]+stock_cols].copy()
     df_stock["stock_total_t"] = df_log["stock_total_t"]
 
-    # gráfico PNG (stock total)
-    fig, ax = plt.subplots(figsize=(8,4))
+    # gráfico PNG: total consolidado
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(df_log["time"], df_log["stock_total_t"], color="#0f3057", linewidth=2.4)
+    ax.fill_between(df_log["time"], 0, df_log["stock_total_t"], color="#dbe8ff", alpha=0.5)
+    ax.set_title("Stock total en pisciculturas y predios (t)")
+    ax.set_xlabel("Tiempo"); ax.set_ylabel("Toneladas")
+    ax.grid(True, linestyle='--', alpha=0.3)
+    buf_png_total = io.BytesIO()
+    fig.tight_layout(); fig.savefig(buf_png_total, format='png'); plt.close(fig)
+    buf_png_total.seek(0)
+
+    # gráfico PNG: detalle por piscicultura
+    fig, ax = plt.subplots(figsize=(8, 4))
     for c in centers:
-        ax.plot(df_log["time"], df_log[f"stock_{c['name']}"] , alpha=0.4, label=c['name']+
-                (f" → {c.get('predio')}" if c.get('predio') else ""))
-    ax.plot(df_log["time"], df_log["stock_total_t"], color="#0f3057", linewidth=2.2, label="Total")
-    ax.fill_between(df_log["time"], 0, df_log["stock_total_t"], color="#dbe8ff", alpha=0.4)
-    ax.set_title("Stock en pisciculturas y predios (t)")
+        label = c['name'] + (f" → {c.get('predio')}" if c.get('predio') else "")
+        ax.plot(df_log["time"], df_log[f"stock_{c['name']}"] , linewidth=1.4, label=label)
+    ax.set_title("Stock por piscicultura y predio (t)")
     ax.set_xlabel("Tiempo"); ax.set_ylabel("Toneladas")
     ax.legend(loc="upper left", fontsize=8)
     ax.grid(True, linestyle='--', alpha=0.3)
-    buf_png = io.BytesIO()
-    fig.tight_layout(); fig.savefig(buf_png, format='png'); plt.close(fig)
-    buf_png.seek(0)
+    buf_png_centers = io.BytesIO()
+    fig.tight_layout(); fig.savefig(buf_png_centers, format='png'); plt.close(fig)
+    buf_png_centers.seek(0)
 
     # Excel con KPI, Log y Stock
     buf_xlsx = io.BytesIO()
@@ -391,4 +400,4 @@ def simulate_two_trucks(
 
     buf_xlsx.seek(0)
 
-    return kpis, df_log, df_stock, buf_png, buf_xlsx
+    return kpis, df_log, df_stock, buf_png_total, buf_png_centers, buf_xlsx
