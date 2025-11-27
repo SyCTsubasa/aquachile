@@ -80,6 +80,17 @@ def simulate_two_trucks(
     cap   = {c["name"]: c.get("batea_capacity_t",15.0) for c in centers}
     dem   = {c["name"]: c.get("m3_demand",Q_proc_m3h) for c in centers}
     TSmap = {c["name"]: c.get("TS_in",TS_in) for c in centers}
+    produced_cum = {c["name"]: 0.0 for c in centers}
+
+    total_dem = sum(dem.values()) if dem else 0
+    expected_cake_total_t = target_volume * rho * TS_in * eta_captura / max(TS_cake, 1e-6)
+    target_alloc = {
+        c["name"]: (
+            expected_cake_total_t * (dem[c["name"]] / total_dem)
+            if total_dem > 0 else expected_cake_total_t / len(centers)
+        )
+        for c in centers
+    }
 
     # planta
     proc_state="DRIVE"; proc_time=_tramo_min(route[0], truck_speed_kmh); proc_ptr=0
@@ -120,9 +131,12 @@ def simulate_two_trucks(
                 free = cap[current_to]-stock[current_to]
                 add = min(cake, max(free,0.0))
                 stock[current_to]+=add
+                produced_cum[current_to] += add
                 frac = add/cake if cake>1e-9 else 0.0
                 proc_cake += add; proc_tDR += tDR*frac; proc_kWh += 8*(tDR*frac); proc_hours_run += step/60
-                if stock[current_to] >= cap[current_to]*0.95 and proc_ptr < len(route)-1:
+                target_cake = min(cap[current_to]*0.95, target_alloc.get(current_to, 0.0)*1.05)
+                target_cake = max(target_cake, 0.5)  # asegurar salida aun con volúmenes bajos
+                if produced_cum[current_to] >= target_cake and proc_ptr < len(route)-1:
                     proc_ptr += 1
                     current_to = route[proc_ptr]["to"]
                     proc_state="DRIVE"; proc_time=_tramo_min(route[proc_ptr], truck_speed_kmh)

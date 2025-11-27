@@ -67,6 +67,11 @@ class ScenarioFlowTests(TestCase):
         self.assertGreater(len(png_centers.read()), 0)
         self.assertGreater(len(xlsx.read()), 0)
 
+        # asegurar que la producción se distribuye y no queda fijada en un solo centro
+        stock_cols = [c for c in df_stock.columns if c.startswith("stock_") and c != "stock_total_t"]
+        active_centers = (df_stock[stock_cols].max() > 0).sum()
+        self.assertGreaterEqual(active_centers, 2)
+
 
 class RouteDataTests(TestCase):
     def test_route_segments_match_expected_dataset(self):
