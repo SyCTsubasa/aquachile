@@ -99,10 +99,12 @@ def simulate_two_trucks(
 
     # distribución
     dist_state="IDLE"; dist_time=0; dist_km=0.0; dist_ton_km=0.0; dist_trips=0
-    dist_payload=0.0; dist_to=None
+    dist_payload=0.0; dist_to=None; dist_leg_km=0.0
 
     rows=[]
-    max_minutes = int(((target_volume / max(Q_proc_m3h, 1e-6)) * 60) + 24*60)
+    # permitir terminar distribución aún con rutas largas: tiempo de proceso + 72h buffer
+    route_minutes = sum(_tramo_min(tr, truck_speed_kmh) for tr in route)
+    max_minutes = ((target_volume / max(Q_proc_m3h, 1e-6)) * 60) + 72*60 + route_minutes
     max_steps = max(int(max_minutes/step), 1)
     s = 0
     while s < max_steps:
@@ -155,21 +157,24 @@ def simulate_two_trucks(
                 for tr in route:
                     km+=tr["km"]; tmin+=_tramo_min(tr, truck_speed_kmh)
                     if tr["to"]==pick: break
-                dist_state="DRIVE_PICK"; dist_time=tmin; dist_km+=km; dist_to=pick; dist_km_ida=km
+                dist_state="DRIVE_PICK"; dist_time=tmin; dist_to=pick; dist_km_ida=km; dist_leg_km=km
         elif dist_state=="DRIVE_PICK":
             dist_time -= step
             if dist_time<=0:
+                dist_km += dist_leg_km
                 dist_state="LOAD"; dist_time=30
         elif dist_state=="LOAD":
             dist_time -= step
             if dist_time<=0:
                 dist_payload = stock[dist_to]; stock[dist_to]=0.0; dist_trips+=1
                 km=dist_km_ida; tmin=int(km/truck_speed_kmh*60)
-                dist_km += km; dist_time=tmin; dist_state="DRIVE_DROP"
+                dist_leg_km = km
+                dist_time=tmin; dist_state="DRIVE_DROP"
                 dist_ton_km += dist_payload * km
         elif dist_state=="DRIVE_DROP":
             dist_time -= step
             if dist_time<=0:
+                dist_km += dist_leg_km
                 dist_state="UNLOAD"; dist_time=30
         elif dist_state=="UNLOAD":
             dist_time -= step
